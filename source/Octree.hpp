@@ -6,7 +6,7 @@
 #define WHITE_NODE 1 //no children, no content
 #define INTERVAL_NODE 2 //has children, no content
 
-template<size_t fill_condition>
+template<size_t height>
 class OcTree {
 private:
   struct Octant {
@@ -15,21 +15,16 @@ private:
     vector<shared_ptr<Vector3d>> content;
     shared_ptr<Octant> parent;
     COLOR color;
-    unsigned int max_volume;
 
-    Octant(unsigned int volume, Vector3d begin, Vector3d size, shared_ptr<Octant> parent);
+    Octant(Vector3d begin, Vector3d size, shared_ptr<Octant> parent);
     bool contains(Vector3d point);
     bool isLeaf();
-    bool meets_stop_criteria();
   };
   shared_ptr<Octant> root;
   vector<Vector3d> data_set;
 
-  bool find(Vector3d point, shared_ptr<Octant> &current, size_t &point_id);
   void insert(Vector3d newPoint, shared_ptr<Octant> &current);
-  //void insertD(Vector3d newPoint, shared_ptr<Octant> &current, size_t height = 1);
-  void remove(Vector3d remPoint);
-  void split(shared_ptr<Octant> &node);
+  void split(shared_ptr<Octant> &node, size_t current_level);
   void recall(shared_ptr<Octant> &node, COLOR condition = BLACK_NODE);
 public:
   OcTree(string path_file);
@@ -39,39 +34,33 @@ public:
   shared_ptr<Octant> getBegin(){ return root; }
 };
 
-template<size_t fill_condition>
-OcTree<fill_condition>::Octant::Octant(unsigned int volume, Vector3d begin, Vector3d size, shared_ptr<Octant> parent) {
+template<size_t height>
+OcTree<height>::Octant::Octant(Vector3d begin, Vector3d size, shared_ptr<Octant> parent) {
   bound_min = begin;
   bound_max = begin + size;
   own_size = size;
   child_size = size * 0.5;
   middle = bound_min + child_size;
   this->parent = parent;
-  max_volume = volume;
   color = WHITE_NODE;
 }
 
-template<size_t fill_condition>
-bool OcTree<fill_condition>::Octant::contains(Vector3d point) {
+template<size_t height>
+bool OcTree<height>::Octant::contains(Vector3d point) {
   return (bound_min < point) && (point <= bound_max);
 }
 
-template<size_t fill_condition>
-bool OcTree<fill_condition>::Octant::isLeaf() {
+template<size_t height>
+bool OcTree<height>::Octant::isLeaf() {
   return BLACK_NODE == color || color == WHITE_NODE;
-}
-
-template<size_t fill_condition>
-bool OcTree<fill_condition>::Octant::meets_stop_criteria() {
-  return max_volume == 1 || (double(max_volume) * double(fill_condition) / 100.0) <= (unsigned int)content.size();
 }
 
 //###################################################################################
 
-template<size_t fill_condition>
-OcTree<fill_condition>::OcTree(string path_file) {
+template<size_t height>
+OcTree<height>::OcTree(string path_file) {
   try {
-    if (fill_condition > size_t(100)) {
+    if (height > size_t(100)) {
       throw runtime_error(ERROR_FILL_VALUE);
     }
 
@@ -79,13 +68,17 @@ OcTree<fill_condition>::OcTree(string path_file) {
     if (obj3d_file.is_open()) {
       ALERT(">>file " + path_file.substr(0, size_t(path_file.length()) - 4) + " openned");
       pair<Vector3d,Vector3d> bounds = get_Points(obj3d_file, data_set);
-      root = make_shared<Octant>(unsigned int(data_set.size()), bounds.first, bounds.second - bounds.first, nullptr);
+      root = make_shared<Octant>(bounds.first, bounds.second - bounds.first, nullptr);
       ALERT("Data Set size: " + to_string(int(data_set.size())));
       DrawableOctant cube_root(root->middle, root->own_size, true);
       d_octants.push_back(cube_root);
+
+      shared_ptr<Octant> current = root;
+      split(current, size_t(1));
+
       for (Vector3d vec : data_set) {
-        shared_ptr<Octant> current = root;
-        insertD(vec, current);
+        current = root;
+        insert(vec, current);
       }
       ALERT("ALL DATA  SAVED");
     }
@@ -98,102 +91,45 @@ OcTree<fill_condition>::OcTree(string path_file) {
   }
 }
 
-template<size_t fill_condition>
-OcTree<fill_condition>::~OcTree() {
+template<size_t height>
+OcTree<height>::~OcTree() {
   root.reset();
 }
 
-template<size_t fill_condition>
-bool OcTree<fill_condition>::find(Vector3d point, shared_ptr<Octant> &current, size_t &point_id) {
-  if (!current->isLeaf()) {
-    for (size_t i = size_t(0); i < NUM_CHILDS; ++i) {
-      if (current->children[i]->contains(point)) {
-        current = current->children[i];
-        find(point, current, point_id);
-      }
-    }
-  }
-  else {
-    point_id = size_t(0);
-    for (shared_ptr<Vector3d> p : current->content) {
-      if (*p == point) return true;
-      ++point_id;
-    }
-  }
-  return false;
-}
-
-template<size_t fill_condition>
-void OcTree<fill_condition>::insert(Vector3d newPoint, shared_ptr<Octant> &current) {
+template<size_t height>
+void OcTree<height>::insert(Vector3d newPoint, shared_ptr<Octant> &current) {
   if (!current->isLeaf()) {
     for (size_t i = size_t(0); i < NUM_CHILDS; ++i) {
       if (current->children[i]->contains(newPoint)) { insert(newPoint, current->children[i]); }
     }
   }
   else {
-    if (!current->meets_stop_criteria()) { 
-      if (current->color == WHITE_NODE) split(current);
-      insert(newPoint, current);
-    }
-    else {
-      shared_ptr<Vector3d> new_point_ptr = make_shared<Vector3d>(newPoint.x, newPoint.y, newPoint.z);
-      current->content.push_back(new_point_ptr);
-      current->color = BLACK_NODE;
-      recall(current->parent);
-    }
-  }
-}
-/*
-template<size_t fill_condition>
-void OcTree<fill_condition>::insertD(Vector3d newPoint, shared_ptr<Octant> &current, size_t height) {
-  if (height == fill_condition || height == 1) {
-    for (size_t i = size_t(0); i < NUM_CHILDS; ++i) {
-      if (current->children[i]->contains(newPoint)) { insertD(newPoint, current->children[i], height - 1); }
-    }
-  }
-  else {
-    if (current->color == WHITE_NODE) {
-      split(current);
-      insertD(newPoint, current, height);
-    }
-    else {
-      shared_ptr<Vector3d> new_point_ptr = make_shared<Vector3d>(newPoint.x, newPoint.y, newPoint.z);
-      current->content.push_back(new_point_ptr);
-      current->color = BLACK_NODE;
-      //recall(current->parent);
-    }
-  }
-}*/
-
-template<size_t fill_condition>
-void OcTree<fill_condition>::remove(Vector3d remPoint) {
-  shared_ptr<Octant> current = root;
-  size_t point_id;
-  if (find(remPoint, current, point_id)) {
-    current->content.erase(current->content.begin() + point_id);
-    if (current->content.empty()) current->color = WHITE_NODE;
-    recall(current->parent, WHITE_NODE);
+    shared_ptr<Vector3d> new_point_ptr = make_shared<Vector3d>(newPoint.x, newPoint.y, newPoint.z);
+    current->content.push_back(new_point_ptr);
+    current->color = BLACK_NODE;
+    recall(current->parent);
   }
 }
 
-template<size_t fill_condition>
-void OcTree<fill_condition>::split(shared_ptr<Octant> &node) {
+template<size_t height>
+void OcTree<height>::split(shared_ptr<Octant> &node, size_t current_level) {
+  if (current_level == height) { return; }
   node->color = INTERVAL_NODE;
-  unsigned int child_volume = node->max_volume / 8;
-  child_volume = (child_volume != 0) ? child_volume : 1;
   size_t i = size_t(0);
   for (int x = 0; x < 2; x++) {
     for (int y = 0; y < 2; y++) {
       for (int z = 0; z < 2; z++) {
         Vector3d gen = node->child_size * Vector3d(double(x), double(y), double(z));
-        node->children[i++] = make_shared<Octant>(child_volume, node->bound_min + gen, node->child_size, node);
+        node->children[i] = make_shared<Octant>(node->bound_min + gen, node->child_size, node);
+        split(node->children[i], current_level + size_t(1));
+        ++i;
       }
     }
   }
 }
 
-template<size_t fill_condition>
-void OcTree<fill_condition>::recall(shared_ptr<Octant> &node, COLOR condition) {
+template<size_t height>
+void OcTree<height>::recall(shared_ptr<Octant> &node, COLOR condition) {
   for (size_t i = size_t(0); i < NUM_CHILDS; ++i) {
     if (node->children[i]->color != condition) return;
   }
@@ -211,8 +147,8 @@ void OcTree<fill_condition>::recall(shared_ptr<Octant> &node, COLOR condition) {
   recall(node->parent);
 }
 
-template<size_t fill_condition>
-void OcTree<fill_condition>::read_OcTree(shared_ptr<Octant> node) {
+template<size_t height>
+void OcTree<height>::read_OcTree(shared_ptr<Octant> node) {
   for (size_t i = size_t(0); i < NUM_CHILDS; ++i) {
     if (node->children[i]->color == INTERVAL_NODE) {
       read_OcTree(node->children[i]);
